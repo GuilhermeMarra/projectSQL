@@ -1,3 +1,191 @@
+------ Queries
+
+-------------------------------------
+-------------------------------------
+-------------OPTIMIZATION------------
+-------------------------------------
+-------------------------------------
+
+CREATE INDEX artist_name
+ON artist (name);
+
+CREATE INDEX country_name
+ON country (name);
+
+CREATE INDEX track_release
+ON track (release);
+
+CREATE INDEX artist_area
+ON artist (area);
+
+CREATE INDEX release_contribution
+ON release_has_artist (contribution);
+
+CREATE INDEX release_has_artist_release
+ON release_has_artist (release);
+
+------------------------------------------------------
+
+-- Q1 --
+SELECT country.name, artist.name
+FROM artist, country
+WHERE artist.area = country.id
+ORDER BY country.name, artist.name;
+
+
+-- Q2 --
+SELECT country.name, artist.name
+FROM artist, country
+WHERE artist.area = country.id and artist.area = (SELECT   artist.area
+                                                    FROM     artist
+                                                    GROUP BY artist.area
+                                                    ORDER BY COUNT(artist.area) DESC
+                                                    LIMIT 1)
+ORDER BY artist.name;
+
+--OPTIMIZED:
+CREATE VIEW CountryWithMostArtists AS
+    (SELECT   artist.area
+    FROM     artist
+    GROUP BY artist.area
+    ORDER BY COUNT(artist.area) DESC
+    LIMIT 1);
+SELECT country.name, artist.name
+FROM artist, country, CountryWithMostArtists
+WHERE artist.area = country.id and artist.area in (SELECT CountryWithMostArtists.area
+                                                    FROM CountryWithMostArtists)
+ORDER BY artist.name;
+
+-- CENTA:
+SELECT c.name as name, a.name as name
+FROM country c, artist a, (SELECT t.area
+FROM (SELECT area, COUNT(*)
+FROM artist
+WHERE area IS NOT NULL
+GROUP BY area) as t
+ORDER BY t.count DESC
+LIMIT 1) as temp
+WHERE c.id = temp.area AND a.area = temp.area;
+
+
+
+-- Q3 --
+SELECT artist.id
+FROM release_country, release_has_artist, country, artist
+WHERE release_has_artist.artist = artist.id and release_has_artist.release = release_country.release
+        and  release_country.country = country.id and country.name LIKE 'A%'
+GROUP BY artist.id
+ORDER BY  artist.id;
+--OPTIMIZED:
+SELECT release_has_artist.artist
+FROM release_has_artist
+INNER JOIN release_country ON release_has_artist.release = release_country.release
+INNER JOIN country ON country.id = release_country.country
+WHERE country.name LIKE 'A%'
+GROUP BY release_has_artist.artist
+ORDER BY  release_has_artist.artist;
+--CENTA:
+SELECT DISTINCT a.id as id
+FROM artist a, release_has_artist rha, release_country rc, country c
+WHERE (rha.artist = a.id AND rha.release = rc.release
+AND CAST(rc.country AS INT) = c.id AND LEFT(c.name, 1) = 'A');
+
+
+
+
+-- Q4 --
+explain analyze
+SELECT release_country.country, COUNT(release_country.country)
+FROM release_country
+GROUP BY release_country.country
+ORDER BY COUNT(release_country.country) DESC;
+
+
+
+-- Q5 --
+SELECT release_has_artist.release, release_has_artist.artist
+FROM release_has_artist
+WHERE release_has_artist.contribution = 0;
+
+
+
+-- Q6 --
+SELECT table1.artist, table2.artist, COUNT(*) as count
+FROM release_has_artist as table1, release_has_artist as table2
+WHERE table1.release = table2.release and table1.artist != table2.artist
+GROUP BY (table1.artist, table2.artist);
+
+--CENTA:
+SELECT rha1.artist as artist, rha2.artist as artist, COUNT(*) as count
+FROM release_has_artist rha1, release_has_artist rha2
+WHERE rha1.artist <> rha2.artist AND rha1.release = rha2.release
+GROUP BY rha1.artist, rha2.artist;
+
+
+
+--Q7--
+SELECT release_country.country, track.release
+FROM track, release_country
+WHERE track.release = release_country.release
+GROUP BY track.release, release_country.country
+HAVING COUNT (track.release) > 1;
+
+
+
+--Q8--
+SELECT table1.release as rid , table1.country
+FROM release_country as table1, release_country as table2
+WHERE table1.release=table2.release and table1.country != table2.country and (table1.year>table2.year or (table1.year=table2.year and table1.month > table2.month) or
+                                        (table1.year=table2.year and table1.month = table2.month and table1.day>table2.day) )
+GROUP BY table1.release, table1.country
+ORDER BY table1.release;
+--OPTIMIZED:
+SELECT table1.release as rid , table1.country
+FROM release_country as table1, release_country as table2
+WHERE table1.release=table2.release and table1.country != table2.country and (table1.year*10000 + table1.month*100 + table1.day > table2.year*10000 + table2.month*100 + table2.day )
+GROUP BY table1.release, table1.country
+ORDER BY table1.release;
+
+
+
+--Q9--
+SELECT country.name as country, artist.name as name,
+(
+	SELECT COUNT(*)
+	FROM artist as aux1
+	WHERE aux1.area = artist.area AND
+	      (aux1.syear*10000 + aux1.smonth*100 + aux1.sday < artist.syear*10000 + artist.smonth*100 + artist.sday)
+	LIMIT 1
+) as nb,
+(
+	SELECT COUNT(*)
+	FROM artist as aux2
+	WHERE (aux2.syear*10000 + aux2.smonth*100 + aux2.sday < artist.syear*10000 + artist.smonth*100 + artist.sday)
+	LIMIT 1
+) as nb_global
+FROM artist
+INNER JOIN country ON country.id = artist.area
+WHERE artist.type = 1;
+
+-- OPTIMIZED:
+CREATE VIEW ArtistsOrdered AS
+    (SELECT row_number() OVER (ORDER BY A.syear, A.smonth, A.sday) - 1 AS nb_global,
+            row_number() OVER (PARTITION BY area ORDER BY area, syear, smonth, sday) - 1 AS nb, *
+    FROM Artist A
+    WHERE A.syear IS NOT NULL AND A.smonth IS NOT NULL AND A.sday IS NOT NULL);
+
+SELECT C.name as country, P0.name as name, P0.nb, P0.nb_global
+FROM ArtistsOrdered P0
+INNER JOIN country c on P0.area = c.id
+WHERE P0.type = 1
+ORDER BY nb, nb_global;
+
+
+
+
+
+------------------------------------------------------------------------------------------------------------------------
+
 create table artist_type
 (
     id int PRIMARY KEY NOT NULL,
@@ -257,6 +445,9 @@ DROP TABLE  release_has_artist CASCADE;
 DROP TABLE  release_status CASCADE;
 DROP TABLE  release_country CASCADE;
 DROP TABLE  track_has_artist CASCADE;*/
+
+
+
 
 
 
